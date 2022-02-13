@@ -1,0 +1,17 @@
+- name: install package on system
+  include: "pkg-{{ ansible_pkg_mgr }}.yml"
+
+- name: enable nftables service
+  systemd: name=nftables enabled=true
+
+- name: create /etc/nftables dir
+  file: name=/etc/nftables state=directory owner=root group=root mode=0755
+
+- name: generate nftables config
+  template: src={{ item.path }} dest=/{{ item.path | regex_replace('\.j2$', '') }} owner=root group=root mode={{ item.mode }}
+  with_filetree: templates/
+  notify: restart nftables
+  when: item.state in ('file', 'link')
+  tags:
+    config
+

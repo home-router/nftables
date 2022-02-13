@@ -1,0 +1,188 @@
+#!/usr/bin/nft -f
+
+flush ruleset
+
+table inet mangle {
+	chain PREROUTING {
+		type filter hook prerouting priority mangle; policy accept;
+		counter jump FIREWALL_IN_HOOK
+	}
+
+	chain INPUT {
+		type filter hook input priority mangle; policy accept;
+	}
+
+	chain FORWARD {
+		type filter hook forward priority mangle; policy accept;
+	}
+
+	chain OUTPUT {
+		type route hook output priority mangle; policy accept;
+	}
+
+	chain POSTROUTING {
+		type filter hook postrouting priority mangle; policy accept;
+		counter jump FIREWALL_OUT_HOOK
+	}
+
+	chain FIREWALL_IN_HOOK {
+{% for itf, direction in nftables_mangle['interfaces'].items() %}
+{%   if 'in' in direction %}
+		{{ itf | input_itf }} counter goto {{ direction['in'] }}_RULES
+{%   endif %}
+{% endfor %}
+	}
+
+	chain FIREWALL_OUT_HOOK {
+{% for itf, direction in nftables_mangle['interfaces'].items() %}
+{%   if 'out' in direction %}
+		{{ itf | output_itf }} counter goto {{ direction['out'] }}_RULES
+{%   endif %}
+{% endfor %}
+	}
+
+{% for chain_name, chain in nftables_mangle['chains'].items() %}
+	chain {{ chain_name }}_RULES {
+{%   for rule in chain -%}
+		{{ rule | gen_nft_rule(indent=2) }}
+{%   endfor %}
+	}
+{% endfor %}
+}
+table inet raw {
+	chain PREROUTING {
+		type filter hook prerouting priority raw; policy accept;
+	}
+
+	chain OUTPUT {
+		type filter hook output priority raw; policy accept;
+	}
+}
+# We only do NAT for ipv4 for now.
+table ip nat {
+	chain PREROUTING {
+		type nat hook prerouting priority dstnat; policy accept;
+{% for itf, direction in nftables_destination_nat['interfaces'].items() %}
+		{{ itf | input_itf }} counter goto {{ direction['in'] }}_RULES
+{% endfor %}
+	}
+
+	chain INPUT {
+		type nat hook input priority 100; policy accept;
+	}
+
+	chain OUTPUT {
+		type nat hook output priority -100; policy accept;
+		# Router locally generated traffic does NOT go through PREROUTING chain.
+		#
+		# Note: [netfilter document](https://www.netfilter.org/documentation/HOWTO//NAT-HOWTO.txt) says:
+		# (For OUTPUT chain) The current limitation is that you can only change the destination to
+		# the local machine (e.g. `j DNAT --to 127.0.0.1'), not to any
+		# other machine, otherwise the replies won't be translated correctly.
+		#
+		# So to redirect local generate packets, add chains and rules here.
+	}
+
+	chain POSTROUTING {
+		type nat hook postrouting priority srcnat; policy accept;
+{% for itf, direction in nftables_source_nat['interfaces'].items() %}
+		{{ itf | output_itf }} counter goto {{ direction['out'] }}_RULES
+{% endfor %}
+	}
+
+{% for chain_name, chain in nftables_destination_nat['chains'].items() %}
+	chain {{ chain_name }}_RULES {
+{%   for rule in chain -%}
+		{{ rule | gen_nft_rule(indent=2) }}
+{%   endfor %}
+	}
+{% endfor %}
+
+{% for chain_name, chain in nftables_source_nat['chains'].items() %}
+	chain {{ chain_name }}_RULES {
+{%   for rule in chain -%}
+		{{ rule | gen_nft_rule(indent=2) }}
+{%   endfor %}
+	}
+{% endfor %}
+}
+table inet filter {
+	#chain PREROUTING {
+		#type filter hook prerouting priority -301; policy accept;
+		# Insert trace rules here. Run `nft monitor trace` to see trace output.
+		#meta nftrace set 1
+	#}
+
+	chain INPUT {
+		# Traffic incoming for the router itself.
+		type filter hook input priority filter; policy accept;
+		counter jump FIREWALL_LOCAL_HOOK
+	}
+
+	chain FORWARD {
+		# Traffic incoming for the other hosts.
+		type filter hook forward priority filter; policy accept;
+		counter jump PORT_FORWARD_FIREWALL_HOOK
+		counter jump FIREWALL_IN_HOOK
+		counter jump FIREWALL_OUT_HOOK
+	}
+
+	chain OUTPUT {
+		type filter hook output priority filter; policy accept;
+	}
+
+	chain FIREWALL_LOCAL_HOOK {
+{% for itf, direction in nftables_firewall['interfaces'].items() %}
+{%   if 'local' in direction %}
+		{{ itf | input_itf }} counter goto {{ direction['local'] }}_RULES
+{%   endif %}
+{% endfor %}
+	}
+
+	chain FIREWALL_IN_HOOK {
+{% for itf, direction in nftables_firewall['interfaces'].items() %}
+{%   if 'in' in direction %}
+		{{ itf | input_itf }} counter jump {{ direction['in'] }}_RULES
+{%   endif %}
+{% endfor %}
+	}
+
+	chain FIREWALL_OUT_HOOK {
+{% for itf, direction in nftables_firewall['interfaces'].items() %}
+{%   if 'out' in direction %}
+		{{ itf | output_itf }} counter goto {{ direction['out'] }}_RULES
+{%   endif %}
+{% endfor %}
+	}
+
+{% for chain_name, chain in nftables_firewall['chains'].items() %}
+	chain {{ chain_name }}_RULES {
+{%   for rule in chain -%}
+		{{ rule | gen_nft_rule(indent=2) }}
+{%   endfor %}
+	}
+{% endfor %}
+
+	chain PORT_FORWARD_FIREWALL_HOOK {
+{% if nftables_auto_open_dnat_port %}
+{% for itf, direction in nftables_destination_nat['interfaces'].items() %}
+		{{ itf | input_itf }} counter jump {{ direction['in'] }}_RULES
+{% endfor %}
+{% endif %}
+	}
+
+{% if nftables_auto_open_dnat_port %}
+{% for chain_name, chain in nftables_destination_nat['chains'].items() %}
+	chain {{ chain_name }}_RULES {
+{%   for rule in chain -%}
+		{{ rule | open_dnat_port(indent=2) }}
+{%   endfor %}
+	}
+{% endfor %}
+{% endif %}
+}
+
+# For chains with same names, rulesets are appended to the end of existing chain.
+# In order to define rules proceed chains defined in this file, define new base chain
+# with lower priority value.
+include "/etc/nftables/*.nft"

@@ -1,0 +1,5 @@
+- name: restart nftables
+  # systemd nftables service may flush all rules before executing the nft script.
+  # In case there's error in the script, it will result in empty nftable rulesets which
+  # is not desirable.
+  command: /usr/sbin/nft -f /etc/nftables.conf

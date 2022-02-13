@@ -1,0 +1,4 @@
+- name: install nftables on Archlinux
+  pacman:
+      name: nftables
+      state: present

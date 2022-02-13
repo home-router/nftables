@@ -1,0 +1,137 @@
+# If this is set to true, rules to accept destination NAT incoming traffic
+# are also generated in firewall rules.
+# Refer to chain PORT_FORWARD_FIREWALL_HOOK.
+nftables_auto_open_dnat_port: true
+
+nftables_destination_nat:
+  chains:
+    PORT_FORWARD_PPPOE0:
+      # Rule order is important, so we use list here.
+      - description: port forward port 3000
+        # raw: write nftables rules directly.
+        #   This is useful if the filter generated rules can't meed your needs.
+        #   All other settings are ignored if raw is specified.
+        match:
+          destination:
+            port: 3000
+          # protocol: optional, use comma separated list for multiple protocols.
+          # defaults to tcp,udp
+          protocol: tcp
+        action:
+          destination_nat:
+            address: 192.168.1.3
+            port: 3000  # optional, defaults to same incoming port
+  interfaces:
+    pppoe0:
+      # Only in direction is valid here.
+      in: PORT_FORWARD_PPPOE0
+
+nftables_source_nat:
+  chains:
+    SNAT_MASQUERADE:
+      - description: masquerade using interface addresss
+        # raw is the same as in destination nat.
+        action:
+          source_nat:
+            address: masquerade
+            #address: 192.168.1.2 # we can also specify a CIDR address here
+  interfaces:
+    pppoe0:
+      # Only out direction is valid here.
+      out: SNAT_MASQUERADE
+
+nftables_mangle:
+  chains:
+    TCP_MSS_PPPOE:
+      - description: TCP MSS clamp for pppoe (IPv4)
+        match:
+          ip_version: ipv4  # make this rule apply to ipv4 only. Defaults to both ipv4 and ipv6.
+          # For an explanation of this syntax, refer to https://www.spinics.net/lists/netfilter/msg57358.html
+          # It's basically like C expression of "(tcp_flags & (syn | rst)) == sync"
+          tcp_flags: '& (syn | rst) == syn'
+        action:
+          tcp_option:
+            # Set max segment size.
+            # IPv4 1492 layer 2 MTU - 20 byte IPv4 header - 20 byte TCP header
+            maxseg size: 1452
+      - description: TCP MSS clamp for pppoe (IPv6)
+        match:
+          ip_version: ipv6  # make this rule apply to ipv6 only
+          tcp_flags: '& (syn | rst) == syn'
+        action:
+          tcp_option:
+            # IPv6 1492 layer 2 MTU - 40 byte IPv6 header - 20 byte TCP header
+            maxseg size: 1432
+  interfaces:
+    pppoe*:
+      in: TCP_MSS_PPPOE
+      out: TCP_MSS_PPPOE
+
+nftables_firewall:
+  chains:
+    WAN_IN:
+      - description: allow established and related state
+        #raw: specify nftables rule directly, other keys in this dict is ignored.
+        match:
+          ct_state: established,related
+        action: accept
+      - description: allow ICMPv6 packets
+        match:
+          ip_version: ipv6
+          meta: 'l4proto ipv6-icmp'
+        action: accept
+      - description: drop invalid state
+        match:
+          ct_state: invalid
+        action: drop
+      - description: default drop
+        action: drop
+    WAN_LOCAL:
+      - description: accept ICMPv4 echo-request rate under 4/second
+        # specify nftables rule directly, other keys in this dict is ignored.
+        raw: "meta nfproto ipv4 icmp type echo-request limit rate 4/second counter accept"
+      - description: drop ICMPv4 echo-request over rate limit
+        raw: "meta nfproto ipv4 icmp type echo-request counter drop"
+      - description: allow established and related state
+        match:
+          ct_state: established,related
+        action: accept
+      - description: allow ICMPv6 packets
+        match:
+          ip_version: ipv6
+          meta: 'l4proto ipv6-icmp'
+        action: accept
+      - description: allow DHCPv6 cliente/server
+        match:
+          ip_version: ipv6
+          source:
+            port: 547
+          destination:
+            port: 546
+          protocol: udp
+        action: accept
+      - description: drop invalid state
+        match:
+          ct_state: invalid
+        action: drop
+      - description: allow ssh
+        match:
+          destination:
+            port: 22
+          protocol: tcp
+        action: accept
+      - description: default drop
+        action: drop
+    WAN_OUT:
+      - description: block internal
+        match:
+          source:
+            address: 192.168.1.4
+        action: drop
+  # Defines how to apply chain to interfaces.
+  interfaces:
+    pppoe0:
+      # Rule name must match keys in chains.
+      in: WAN_IN
+      local: WAN_LOCAL
+      out: WAN_OUT
