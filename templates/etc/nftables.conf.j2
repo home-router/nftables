@@ -119,9 +119,17 @@ table inet filter {
 		counter jump FIREWALL_LOCAL_HOOK
 	}
 
+	# Define a flowtable for software flow offloading (use fastpath).
+	# Refer to https://thermalcircle.de/doku.php?id=blog:linux:flowtables_1_a_netfilter_nftables_fastpath
+	flowtable f {
+		hook ingress priority 0; devices = { {{ nftables_flowtable_devices }} };
+	}
+
 	chain FORWARD {
 		# Traffic incoming for the other hosts.
 		type filter hook forward priority filter; policy accept;
+		ip protocol tcp flow add @f
+		counter
 		counter jump PORT_FORWARD_FIREWALL_HOOK
 		counter jump FIREWALL_IN_HOOK
 		counter jump FIREWALL_OUT_HOOK

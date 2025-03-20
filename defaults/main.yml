@@ -3,6 +3,8 @@
 # Refer to chain PORT_FORWARD_FIREWALL_HOOK.
 nftables_auto_open_dnat_port: true
 
+nftables_flowtable_devices: eth0, eth1
+
 nftables_destination_nat:
   chains:
     PORT_FORWARD_PPPOE0:
