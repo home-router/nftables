@@ -142,7 +142,7 @@ class MatchGenerator(object):
     def match_ip_version(version):
         return f'meta nfproto {version}'
 
-    DYNAMIC_INTERFACE_PATTERN = ('ppp', 'tun', 'tap')
+    DYNAMIC_INTERFACE_PATTERN = ("ppp", "tun", "tap", "ipsec")
 
     @staticmethod
     def _is_dynamic_interface(itf_name):
