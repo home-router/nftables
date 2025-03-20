@@ -1,5 +1,5 @@
 - name: Install package on system
-  ansible.builtin.include_tasks: "pkg-{{ ansible_pkg_mgr }}.yml"
+  ansible.builtin.include_tasks: "{{ router_os_distribution }}-pkg.yml"
 
 - name: Enable nftables service
   ansible.builtin.systemd:
